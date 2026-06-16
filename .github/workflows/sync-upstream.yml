@@ -1,0 +1,53 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Sync branches and tags
+    runs-on: ubuntu-latest
+    outputs:
+      new_tags: ${{ steps.sync.outputs.new_tags }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync upstream and detect new tags
+        id: sync
+        run: |
+          git remote add upstream https://github.com/frstrtr/p2poolBCH.git
+
+          git ls-remote --tags origin | grep -v '\^{}' | sed 's|.*refs/tags/||' | sort > /tmp/before.txt
+
+          git fetch upstream --tags --force
+          git checkout master
+          git merge upstream/master --no-edit
+          git push origin master
+          git push origin --tags
+
+          git tag | sort > /tmp/after.txt
+
+          new_tags=$(comm -13 /tmp/before.txt /tmp/after.txt | jq -R . | jq -sc .)
+          [ -z "$new_tags" ] && new_tags='[]'
+          echo "new_tags=$new_tags" >> "$GITHUB_OUTPUT"
+          echo "New tags: $new_tags"
+
+  release:
+    name: Release ${{ matrix.tag }}
+    needs: sync
+    if: needs.sync.outputs.new_tags != '[]'
+    strategy:
+      matrix:
+        tag: ${{ fromJson(needs.sync.outputs.new_tags) }}
+    uses: ./.github/workflows/build-release.yml
+    with:
+      tag: ${{ matrix.tag }}
+    secrets: inherit
